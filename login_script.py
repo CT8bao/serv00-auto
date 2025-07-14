@@ -1,7 +1,6 @@
 import json
 import asyncio
 from pyppeteer import launch
-from datetime import datetime, timedelta
 import aiofiles
 import random
 import requests
@@ -10,9 +9,6 @@ import os
 # 从环境变量中获取 Telegram Bot Token 和 Chat ID
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
-
-def format_to_iso(date):
-    return date.strftime('%Y-%m-%d %H:%M:%S')
 
 async def delay_time(ms):
     await asyncio.sleep(ms / 1000)
@@ -83,6 +79,23 @@ async def shutdown_browser():
         await browser.close()
         browser = None
 
+async def send_telegram_message(messages):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    headers = {'Content-Type': 'application/json'}
+
+    for msg in messages:
+        payload = {
+            'chat_id': TELEGRAM_CHAT_ID,
+            'text': msg
+        }
+        try:
+            response = requests.post(url, json=payload, headers=headers)
+            if response.status_code != 200:
+                print(f"发送消息到 Telegram 失败: {response.text}")
+        except Exception as e:
+            print(f"发送消息到 Telegram 时出错: {e}")
+        await asyncio.sleep(0.5)  # 避免发送过快
+
 async def main():
     global message
 
@@ -94,8 +107,9 @@ async def main():
         print(f'读取 accounts.json 文件时出错: {e}')
         return
 
-    # 初始化消息，仅包含标题
-    message = "*账号列表*\n\n"
+    # 初始化消息
+    message = "账号列表\n\n"
+    account_lines = []
 
     for account in accounts:
         username = account['username']
@@ -105,33 +119,26 @@ async def main():
         # 执行登录但不记录结果
         await login(username, password, panel)
 
-        # 直接添加账号和密码到消息
-        message += f"- {username}: {password}\n"
+        # 添加账号和密码到列表
+        account_lines.append(f"- {username}: {password}")
 
         delay = random.randint(1000, 8000)
         await delay_time(delay)
 
-    await send_telegram_message(message)
+    # 分批发送消息（每批限制在 4000 字符以内）
+    messages = []
+    current_message = message
+    for line in account_lines:
+        if len(current_message) + len(line) + 1 > 4000:  # 预留换行符
+            messages.append(current_message)
+            current_message = "账号列表（续）\n\n"
+        current_message += line + "\n"
+    if current_message.strip() != "账号列表（续）":
+        messages.append(current_message)
+
+    await send_telegram_message(messages)
     print(f'所有账号登录完成！')
     await shutdown_browser()
-
-async def send_telegram_message(message):
-    formatted_message = message
-
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {
-        'chat_id': TELEGRAM_CHAT_ID,
-        'text': formatted_message,
-        'parse_mode': 'Markdown'
-    }
-    headers = {'Content-Type': 'application/json'}
-
-    try:
-        response = requests.post(url, json=payload, headers=headers)
-        if response.status_code != 200:
-            print(f"发送消息到 Telegram 失败: {response.text}")
-    except Exception as e:
-        print(f"发送消息到 Telegram 时出错: {e}")
 
 if __name__ == '__main__':
     asyncio.run(main())
